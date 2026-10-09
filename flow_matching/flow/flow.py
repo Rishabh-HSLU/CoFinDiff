@@ -69,8 +69,39 @@ class ConditionalVectorField(nn.Module):
 
 
 class TargetVectorField:
-    def __init__(self, p_simple, p_data):
+    def __init__(self, p_init, p_data):
         super().__init__()
-        self.p_simple = p_simple
+        self.p_init = p_init
         self.p_data = p_data
-    pass
+
+    def interpolation_path(self, t: torch.Tensor):
+        return (1-t) * self.p_init + t * self.p_data
+
+    def forward(self, t: torch.Tensor) -> tuple:
+        """
+        Computes the target vector field d(xt)/dt using automatic differentiation.
+        Args:
+            - t: time, shape (batch_size, 1)
+        Returns:
+            - vector_field: shape (batch_size, dim)
+        """
+        # 1. Expand 't' to exactly match the shape of the target data (B, dim)
+        # We clone it to isolate it from the outer computational graph
+        t_expanded = t.expand_as(self.p_init).clone()
+
+        # 2. Tell PyTorch to track operations on this expanded time tensor
+        t_expanded.requires_grad_(True)
+
+        # 3. Compute the intermediate state xt
+        xt = self.interpolation_path(t_expanded)
+
+        # 4. Use Autograd to compute the time derivative d(xt)/dt
+        # grad_outputs=torch.ones_like(xt) extracts the independent element-wise gradients
+        vector_field = torch.autograd.grad(
+            outputs=xt,
+            inputs=t_expanded,
+            grad_outputs=torch.ones_like(xt),
+            create_graph=True  # Required if you intend to backpropagate through the loss later
+        )[0]
+
+        return xt, vector_field
